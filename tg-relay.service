@@ -1,0 +1,16 @@
+[Unit]
+Description=TG Anonymous Relay Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nobody
+WorkingDirectory=/opt/tg-relay
+EnvironmentFile=/opt/tg-relay/.env
+ExecStart=/opt/tg-relay/venv/bin/python /opt/tg-relay/tg-relay.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
