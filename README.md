@@ -19,10 +19,11 @@
 
 ```
 tg-relay/
-├── tg-relay.py      # 主程序（~100 行）
+├── tg-relay.py      # 主程序（~180 行）
 ├── tg-relay.service # systemd 服务文件
 ├── .env.example     # 环境变量模板
-└── README.md
+├── README.md        # 使用说明
+└── links.json       # 链接数据文件（自动生成）
 ```
 
 ## 🚀 部署
@@ -87,10 +88,54 @@ TG 设置 → 隐私与安全：
 
 ## 🛠️ 命令
 
-| 命令 | 说明 |
-|:---|:---|
-| `/start` | 欢迎信息 |
-| `/who` | 查看当前对话对象（仅 owner） |
+| 命令 | 说明 | 权限 |
+|------|------|------|
+| `/start` | 欢迎信息 | 所有人 |
+| `/who` | 查看当前对话对象 | Owner |
+| `/links` | 查看可用链接 | 所有人 |
+| `/linkadd <name>;<url>` | 添加新链接（分号分隔，默认类别"常用"） | Owner |
+| `/linkadd <name>;<url>;<category>` | 添加新链接（指定类别） | Owner |
+| `/linkdel <序号>` | 删除指定序号的链接（如 `/linkdel 1`） | Owner |
+| `/linkdel <链接名>` | 删除指定名称的链接（如 `/linkdel VSCode`） | Owner |
+| `/linkcat <category>` | 按类别查看链接 | 所有人 |
+
+### 链接管理示例
+
+```
+# owner 添加链接（使用分号分隔）
+/linkadd VSCode;https://code.visualstudio.com
+
+# owner 添加带类别的链接
+/linkadd Python;https://www.python.org;学习
+
+# 查看所有链接（带序号，可用于删除）
+/links
+
+# 删除链接（两种方式任选）
+/linkdel 1              # 通过序号删除
+/linkdel VSCode         # 通过名称删除
+
+# 查看开发类链接
+/links 开发
+
+# 查看特定类别
+/linkcat 开发
+```
+
+# 🛑 停止运行
+
+### 方式 1：前台运行时（Ctrl+C）
+```bash
+# 在运行机器人的终端中
+Ctrl + C
+# 然后输入 y 确认退出
+```
+
+### 方式 2：systemd 服务（已配置）
+```bash
+sudo systemctl stop tg-relay
+sudo systemctl status tg-relay  # 查看状态
+```
 
 ## 📊 资源占用
 
@@ -102,12 +147,28 @@ TG 设置 → 隐私与安全：
 | RSS | ~38MB |
 | 占比 | ~5% |
 
+### 查看内存占用
+
+```bash
+# 方法 1：查看 systemd 服务状态（推荐）
+systemctl status tg-relay | grep Memory
+
+# 方法 2：查看 Python 进程内存
+ps aux | grep tg-relay.py
+
+# 输出示例：
+# USER       PID %CPU %MEM    VSZ   RSS TTY  STAT START   TIME COMMAND
+# nobody    436116  0.1  2.1  312456  30752 ?    Sl   12:31   0:01 /opt/tg-relay/venv/bin/python /opt/tg-relay/tg-relay.py
+# RSS 列显示实际内存占用（KB）
+```
+
 ## ⚠️ 注意事项
 
 - 仅支持**一对一**对话（同一时间维护一个活跃对话）
 - Bot 被 Block 后消息发送会失败（`bot was blocked by the user`）
 - Token 泄露 → 去 @BotFather `/revoke` 换新
 - Debian 13 必须用 venv（`externally-managed-environment` 限制）
+- 链接数据保存在 `links.json`（与脚本同目录），机器人重启后不会丢失
 
 ## 📄 License
 

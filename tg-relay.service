@@ -5,7 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=nobody
 WorkingDirectory=/opt/tg-relay
 EnvironmentFile=/opt/tg-relay/.env
 ExecStart=/opt/tg-relay/venv/bin/python /opt/tg-relay/tg-relay.py
