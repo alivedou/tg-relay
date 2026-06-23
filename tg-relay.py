@@ -10,8 +10,9 @@ import os
 import telebot
 import json
 
-TOKEN = os.environ["TG_BOT_TOKEN"]
-OWNER_ID = int(os.environ["TG_OWNER_ID"])
+# 环境变量优先，不存在时使用硬编码默认值（方便多环境部署）
+TOKEN = os.getenv("TG_BOT_TOKEN", "")
+OWNER_ID = int(os.getenv("TG_OWNER_ID", "0"))
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -281,6 +282,8 @@ def handle_all(message):
 
 if __name__ == "__main__":
     print("🤖 TG 中继机器人启动中...")
+    token_src = "环境变量" if os.getenv("TG_BOT_TOKEN") else "硬编码"
+    print(f"🔑 Token 来源：{token_src}")
     print(f"📁 链接文件：{LINKS_FILE}")
     print(f"🔗 可用命令：/links, /linkadd, /linkdel")
     bot.infinity_polling()
