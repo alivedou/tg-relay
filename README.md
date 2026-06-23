@@ -19,14 +19,27 @@
 
 ```
 tg-relay/
-├── tg-relay.py      # 主程序（~180 行）
-├── tg-relay.service # systemd 服务文件
-├── .env.example     # 环境变量模板
-├── README.md        # 使用说明
-└── links.json       # 链接数据文件（自动生成）
+├── tg-relay.py        # 主程序（~290 行）
+├── app.py             # Pterodactyl 入口（内容同 tg-relay.py）
+├── tg-relay.service   # systemd 服务文件
+├── requirements.txt   # Python 依赖
+├── .env.example       # 环境变量模板
+├── README.md          # 使用说明
+└── links.json         # 链接数据文件（自动生成）
 ```
 
-## 🚀 部署
+## 🔑 配置方式
+
+支持双模式，**环境变量优先**，不存在时走硬编码默认值：
+
+```python
+TOKEN    = os.getenv("TG_BOT_TOKEN") or ""
+OWNER_ID = int(os.getenv("TG_OWNER_ID") or "0")
+```
+
+同一份代码，三种环境通吃。
+
+## 🚀 部署方式一：VPS + systemd
 
 ### 1. 获取 Bot Token
 
@@ -84,7 +97,37 @@ TG 设置 → 隐私与安全：
 - 手机号码 → 谁可以看到？→ **没有人**
 - 手机号码 → 谁可以通过号码找到我？→ **我的联系人**
 
-这样别人只能通过 @username 搜索到你，发消息会走 Bot 中继。
+## 🐣 部署方式二：Pterodactyl 面板（免费容器）
+
+适用于免费 Pterodactyl 面板，无需 SSH，纯网页操作。
+
+### 1. 准备文件
+
+把 `app.py` 和 `requirements.txt` 下载到本地。
+
+### 2. 改硬编码配置
+
+用任意文本编辑器打开 `app.py`，改以下两行，**不要公开上传**：
+
+```python
+TOKEN    = os.getenv("TG_BOT_TOKEN") or "你的token"
+OWNER_ID = int(os.getenv("TG_OWNER_ID") or "123456789")
+```
+
+### 3. 上传到面板
+
+面板文件管理器 → 进入 `/home/container/` → 拖入 `app.py` 和 `requirements.txt`。
+
+### 4. 启动
+
+点 Start。面板自动识别 `requirements.txt` 装依赖，然后跑 `app.py`。
+
+### 5. 注意事项
+
+- 免费容器通常需**每 7 天手动续期**，过期数据丢失
+- `links.json` 会自动保存，容器重启不丢
+- 硬编码版**不要上传到 GitHub**——token 明文写在代码里
+- 如果面板提供了环境变量编辑器，可以不改 `app.py`，直接设变量
 
 ## 🛠️ 命令
 
@@ -93,49 +136,11 @@ TG 设置 → 隐私与安全：
 | `/start` | 欢迎信息 | 所有人 |
 | `/who` | 查看当前对话对象 | Owner |
 | `/links` | 查看可用链接 | 所有人 |
-| `/linkadd <name>;<url>` | 添加新链接（分号分隔，默认类别"常用"） | Owner |
+| `/linkadd <name>;<url>` | 添加新链接（默认类别"常用"） | Owner |
 | `/linkadd <name>;<url>;<category>` | 添加新链接（指定类别） | Owner |
-| `/linkdel <序号>` | 删除指定序号的链接（如 `/linkdel 1`） | Owner |
-| `/linkdel <链接名>` | 删除指定名称的链接（如 `/linkdel VSCode`） | Owner |
+| `/linkdel <序号>` | 删除指定序号的链接 | Owner |
+| `/linkdel <链接名>` | 删除指定名称的链接 | Owner |
 | `/linkcat <category>` | 按类别查看链接 | 所有人 |
-
-### 链接管理示例
-
-```
-# owner 添加链接（使用分号分隔）
-/linkadd VSCode;https://code.visualstudio.com
-
-# owner 添加带类别的链接
-/linkadd Python;https://www.python.org;学习
-
-# 查看所有链接（带序号，可用于删除）
-/links
-
-# 删除链接（两种方式任选）
-/linkdel 1              # 通过序号删除
-/linkdel VSCode         # 通过名称删除
-
-# 查看开发类链接
-/links 开发
-
-# 查看特定类别
-/linkcat 开发
-```
-
-# 🛑 停止运行
-
-### 方式 1：前台运行时（Ctrl+C）
-```bash
-# 在运行机器人的终端中
-Ctrl + C
-# 然后输入 y 确认退出
-```
-
-### 方式 2：systemd 服务（已配置）
-```bash
-sudo systemctl stop tg-relay
-sudo systemctl status tg-relay  # 查看状态
-```
 
 ## 📊 资源占用
 
@@ -147,7 +152,7 @@ sudo systemctl status tg-relay  # 查看状态
 | RSS | ~38MB |
 | 占比 | ~5% |
 
-### 查看内存占用
+### vps查看内存占用
 
 ```bash
 # 方法 1：查看 systemd 服务状态（推荐）
@@ -165,10 +170,10 @@ ps aux | grep tg-relay.py
 ## ⚠️ 注意事项
 
 - 仅支持**一对一**对话（同一时间维护一个活跃对话）
-- Bot 被 Block 后消息发送会失败（`bot was blocked by the user`）
+- Bot 被 Block 后消息发送会失败
 - Token 泄露 → 去 @BotFather `/revoke` 换新
-- Debian 13 必须用 venv（`externally-managed-environment` 限制）
-- 链接数据保存在 `links.json`（与脚本同目录），机器人重启后不会丢失
+- Debian 13 必须用 venv
+- 链接数据保存在 `links.json`，重启后不会丢失
 
 ## 📄 License
 
