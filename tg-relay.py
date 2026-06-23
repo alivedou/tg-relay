@@ -11,8 +11,12 @@ import telebot
 import json
 
 # 环境变量优先，不存在时使用硬编码默认值（方便多环境部署）
-TOKEN = os.getenv("TG_BOT_TOKEN", "")
-OWNER_ID = int(os.getenv("TG_OWNER_ID", "0"))
+
+TOKEN    = os.getenv("TG_BOT_TOKEN") or ""        # 字符串："abc123:xyz"
+OWNER_ID = int(os.getenv("TG_OWNER_ID") or "0")   # 数字：123456789
+
+
+
 
 bot = telebot.TeleBot(TOKEN)
 
