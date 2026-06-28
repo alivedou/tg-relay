@@ -31,7 +31,7 @@ def check(name, condition, detail=""):
 # ============================================================
 # 测试环境变量
 # ============================================================
-os.environ["TG_BOT_TOKEN"] = "123456:TEST-BOT-TOKEN-FOR-TESTING"
+os.environ["TG_BOT_TOKEN"] = "test:fake-bot-token-for-unit-test"
 os.environ["TG_OWNER_ID"] = "999999999"
 os.environ["TG_PORT"] = "18081"
 os.environ["TG_LOG_LEVEL"] = "DEBUG"
@@ -63,13 +63,13 @@ except ImportError:
 os.remove(env_file)
 
 # 恢复测试环境变量
-os.environ["TG_BOT_TOKEN"] = "123456:TEST-BOT-TOKEN-FOR-TESTING"
+os.environ["TG_BOT_TOKEN"] = "test:fake-bot-token-for-unit-test"
 os.environ["TG_OWNER_ID"] = "999999999"
 
 # 测试 or 兜底
 test_token = os.getenv("TG_BOT_TOKEN") or ""
 test_owner = int(os.getenv("TG_OWNER_ID") or "0")
-check("TOKEN or '' 兜底", test_token == "123456:TEST-BOT-TOKEN-FOR-TESTING")
+check("TOKEN or '' 兜底", test_token == "test:fake-bot-token-for-unit-test")
 check("OWNER_ID or '0' 兜底", test_owner == 999999999)
 
 # 模拟缺失环境变量时 or 兜底
@@ -79,7 +79,7 @@ missing_token = os.getenv("TG_BOT_TOKEN") or ""
 missing_owner = int(os.getenv("TG_OWNER_ID") or "0")
 check("缺失时 TOKEN=''", missing_token == "")
 check("缺失时 OWNER_ID=0", missing_owner == 0)
-os.environ["TG_BOT_TOKEN"] = "123456:TEST-BOT-TOKEN-FOR-TESTING"
+os.environ["TG_BOT_TOKEN"] = "test:fake-bot-token-for-unit-test"
 os.environ["TG_OWNER_ID"] = "999999999"
 
 # ============================================================
@@ -89,7 +89,7 @@ print("\n📦 测试 1: 配置加载")
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_OWNER_ID = int(os.getenv("TG_OWNER_ID", "0"))
 TG_PORT = int(os.getenv("TG_PORT", "8080"))
-check("TG_BOT_TOKEN 读取", TG_BOT_TOKEN == "123456:TEST-BOT-TOKEN-FOR-TESTING")
+check("TG_BOT_TOKEN 读取", TG_BOT_TOKEN == "test:fake-bot-token-for-unit-test")
 check("TG_OWNER_ID 读取", TG_OWNER_ID == 999999999)
 check("TG_PORT 读取", TG_PORT == 18081)
 check("WEBHOOK_URL 默认空", os.getenv("TG_WEBHOOK_URL", "") == "")
@@ -98,9 +98,9 @@ check("WEBHOOK_URL 默认空", os.getenv("TG_WEBHOOK_URL", "") == "")
 # 测试 2: Token 脱敏
 # ============================================================
 print("\n📦 测试 2: Token 脱敏")
-token = "1234567890:AAHqLmNxABCDEFGHijklmnopqrstuvwxyz"
+token = "test_bot_token_for_masking_xyz"
 masked = token[:6] + "..." + token[-4:] if len(token) > 10 else "***"
-check("长 token 脱敏", masked == "123456...wxyz")
+check("长 token 脱敏", masked == "test_b..._xyz")
 short_token = "abc"
 masked_short = short_token[:6] + "..." + short_token[-4:] if len(short_token) > 10 else "***"
 check("短 token 脱敏", masked_short == "***")
