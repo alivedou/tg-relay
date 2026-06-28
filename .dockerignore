@@ -1,0 +1,13 @@
+__pycache__
+*.pyc
+.env
+*.db
+links.json
+data/
+.git
+.gitignore
+README.md
+list.md
+test_*.py
+tg-relay.service
+app.py

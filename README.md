@@ -1,180 +1,140 @@
-# TG 双向匿名中继机器人
+# TG 双向匿名中继机器人 v2.4.0
 
 > 保护聊天隐私的 Telegram 中间层。陌生人只能通过 Bot 联系你，双方互不知道真实身份。
 
-## 🎯 做什么的
+## 核心功能
 
-你在 TG 上设了公开用户名，但不想直接暴露私人账号。这个 Bot 作为中间人：
+- **匿名中继**：陌生人 DM Bot → 转发 Owner；Owner 回复 → 回传陌生人
+- **多对话支持**：同时跟踪多位陌生人，`forwarded_msg_map` 按回复消息自动路由
+- **SQLite 持久化**：对话状态、消息历史、封禁列表重启不丢失
+- **Flask 健康检查**：内置 `GET /health` 端点，适配免费容器面板
+- **Polling / Webhook 双模式**：设 `TG_WEBHOOK_URL` 自动切换
+- **InlineKeyboard 交互**：链接浏览、对话切换支持按钮操作
+- **速率限制**：可配置每用户消息频率限制
+- **黑名单系统**：`/ban` `/unban` `/banlist`
+- **消息模板**：转发格式可自定义（`{name}` `{username}` `{id}` 等占位符）
+- **Web 管理面板**：`/admin?token=xxx` 查看统计和活跃对话
 
-```
-陌生人 → DM Bot → [转发] → 你的私聊
-你 → 回复 Bot → [回传] → 陌生人
-```
-
-- 陌生人看不到你的真实账号（只看到 Bot）
-- 你也看不到对方手机号（只看到昵称/用户名）
-- 双向消息全通过 Bot 中继，身份隔离
-
-## 📦 文件结构
+## 文件结构
 
 ```
 tg-relay/
-├── tg-relay.py        # 主程序（~290 行）
-├── app.py             # Pterodactyl 入口（内容同 tg-relay.py）
-├── tg-relay.service   # systemd 服务文件
-├── requirements.txt   # Python 依赖
-├── .env.example       # 环境变量模板
-├── README.md          # 使用说明
-└── links.json         # 链接数据文件（自动生成）
+├── tg-relay.py          # 主程序
+├── app.py               # Pterodactyl 入口（同 tg-relay.py）
+├── requirements.txt     # Python 依赖
+├── .env.example         # 环境变量模板
+├── tg-relay.service     # systemd 服务文件
+├── Dockerfile           # Docker 构建
+├── docker-compose.yml   # Docker Compose
+├── .dockerignore
+├── relay.db             # SQLite 数据库（自动生成）
+├── links.json           # 链接数据（自动生成）
+├── test_tg_relay.py     # 模拟测试脚本
+├── list.md              # 功能路线图
+└── README.md
 ```
 
-## 🔑 配置方式
+## 快速开始
 
-支持双模式，**环境变量优先**，不存在时走硬编码默认值：
+### 方式一：Pterodactyl 面板（推荐免费容器）
 
-```python
-TOKEN    = os.getenv("TG_BOT_TOKEN") or ""
-OWNER_ID = int(os.getenv("TG_OWNER_ID") or "0")
-```
+1. 上传 `app.py` 和 `requirements.txt` 到面板
+2. 设置环境变量：
+   - `TG_BOT_TOKEN` — 从 [@BotFather](https://t.me/BotFather) 获取
+   - `TG_OWNER_ID` — 从 [@userinfobot](https://t.me/userinfobot) 获取
+3. 面板自动安装依赖并启动
+4. Bot 通过 `/health` 端点（端口 8080）通过健康检查
 
-同一份代码，三种环境通吃。
-
-## 🚀 部署方式一：VPS + systemd
-
-### 1. 获取 Bot Token
-
-去 [@BotFather](https://t.me/BotFather) 创建机器人，拿到 token。
-
-### 2. 获取你的 TG User ID
-
-去 [@userinfobot](https://t.me/userinfobot) 发条消息，拿到数字 ID。
-
-### 3. 上传到 VPS
+### 方式二：VPS + systemd
 
 ```bash
-mkdir -p /opt/tg-relay
-# 把 tg-relay.py 和 .env 放进去
-```
-
-### 4. 配置环境变量
-
-```bash
-cp .env.example .env
-nano .env
-```
-
-填写：
-```
-TG_BOT_TOKEN=123456:ABC-DEF1234gh
-TG_OWNER_ID=987654321
-```
-
-> ⚠️ 不要加 `export`，不要加引号。systemd `EnvironmentFile` 只认纯 `KEY=VALUE`。
-
-### 5. 创建虚拟环境装依赖
-
-```bash
-# Debian 13 需要先装 python3-venv
-apt install python3.12-venv -y
-
-cd /opt/tg-relay
+mkdir /opt/tg-relay && cd /opt/tg-relay
+cp .env.example .env && nano .env   # 填写 TG_BOT_TOKEN 和 TG_OWNER_ID
 python3 -m venv venv
-./venv/bin/pip install pyTelegramBotAPI
+./venv/bin/pip install -r requirements.txt
+cp tg-relay.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable tg-relay --now
 ```
 
-### 6. 注册 systemd 服务
+### 方式三：Docker
 
 ```bash
-cp tg-relay.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable tg-relay --now
-systemctl status tg-relay
+cp .env.example .env && nano .env
+docker compose up -d
 ```
 
-### 7. 配置 TG 隐私（推荐）
+## 环境变量
 
-TG 设置 → 隐私与安全：
-- 手机号码 → 谁可以看到？→ **没有人**
-- 手机号码 → 谁可以通过号码找到我？→ **我的联系人**
+| 变量 | 必填 | 默认值 | 说明 |
+|------|:--:|--------|------|
+| `TG_BOT_TOKEN` | ✅ | - | Bot Token |
+| `TG_OWNER_ID` | ✅ | - | 主人的 Telegram 用户 ID |
+| `TG_PORT` | | `8080` | Flask 端口 |
+| `TG_WEBHOOK_URL` | | - | 设置后走 Webhook 模式 |
+| `TG_LOG_LEVEL` | | `INFO` | DEBUG/INFO/WARNING/ERROR |
+| `TG_WELCOME_OWNER` | | - | Owner 的 /start 自定义内容 |
+| `TG_WELCOME_STRANGER` | | - | 陌生人的 /start 自定义内容 |
+| `TG_OWNER_CONTACT` | | - | /about 中显示的联系方式 |
+| `TG_RATE_LIMIT` | | `0` | 每窗口最大消息数（0=关闭） |
+| `TG_RATE_WINDOW` | | `10` | 速率限制窗口（秒） |
+| `TG_MSG_HEADER` | | `默认格式` | 转发消息头部模板 |
+| `TG_MSG_FOOTER` | | - | 转发消息尾部模板 |
+| `TG_ADMIN_TOKEN` | | - | 管理面板访问 Token |
 
-## 🐣 部署方式二：Pterodactyl 面板（免费容器）
+### 消息模板占位符
 
-适用于免费 Pterodactyl 面板，无需 SSH，纯网页操作。
-
-### 1. 准备文件
-
-把 `app.py` 和 `requirements.txt` 下载到本地。
-
-### 2. 改硬编码配置
-
-用任意文本编辑器打开 `app.py`，改以下两行，**不要公开上传**：
-
-```python
-TOKEN    = os.getenv("TG_BOT_TOKEN") or "你的token"
-OWNER_ID = int(os.getenv("TG_OWNER_ID") or "123456789")
+```
+{name}      — 发送者名称
+{username}  — 发送者用户名
+{id}        — 发送者 ID
+{queue}     — 队列位置
+{total}     — 队列总数
 ```
 
-### 3. 上传到面板
+示例：`TG_MSG_HEADER=📩 {name} (@{username})\nID: {id}\n队列: #{queue}/{total}`
 
-面板文件管理器 → 进入 `/home/container/` → 拖入 `app.py` 和 `requirements.txt`。
-
-### 4. 启动
-
-点 Start。面板自动识别 `requirements.txt` 装依赖，然后跑 `app.py`。
-
-### 5. 注意事项
-
-- 免费容器通常需**每 7 天手动续期**，过期数据丢失
-- `links.json` 会自动保存，容器重启不丢
-- 硬编码版**不要上传到 GitHub**——token 明文写在代码里
-- 如果面板提供了环境变量编辑器，可以不改 `app.py`，直接设变量
-
-## 🛠️ 命令
+## 全部命令
 
 | 命令 | 说明 | 权限 |
 |------|------|------|
 | `/start` | 欢迎信息 | 所有人 |
-| `/who` | 查看当前对话对象 | Owner |
-| `/links` | 查看可用链接 | 所有人 |
-| `/linkadd <name>;<url>` | 添加新链接（默认类别"常用"） | Owner |
-| `/linkadd <name>;<url>;<category>` | 添加新链接（指定类别） | Owner |
-| `/linkdel <序号>` | 删除指定序号的链接 | Owner |
-| `/linkdel <链接名>` | 删除指定名称的链接 | Owner |
-| `/linkcat <category>` | 按类别查看链接 | 所有人 |
+| `/help` | 帮助 | 所有人 |
+| `/ping` | 检查延迟 | 所有人 |
+| `/id` | 获取自己的 ID | 所有人 |
+| `/about` | Bot 信息 | 所有人 |
+| `/links` | 查看链接（分页按钮） | 所有人 |
+| `/linkcat <类别>` | 按类别查看 | 所有人 |
+| `/linkfind <关键词>` | 搜索链接 | 所有人 |
+| `/who` | 当前对话对象 | Owner |
+| `/queue` | 待回复队列 | Owner |
+| `/chat <序号/ID>` | 切换对话对象 | Owner |
+| `/send <ID> <消息>` | 主动发消息 | Owner |
+| `/note <ID> <备注>` | 用户备注 | Owner |
+| `/history [ID]` | 消息记录 | Owner |
+| `/export [ID]` | 导出对话 | Owner |
+| `/ban <ID>` | 封禁用户 | Owner |
+| `/unban <ID>` | 解封用户 | Owner |
+| `/banlist` | 封禁列表 | Owner |
+| `/stats` | 统计面板 | Owner |
+| `/linkadd <n>;<u>;<c>` | 添加链接 | Owner |
+| `/linkedit <旧>;<新>;<URL>;<类>` | 修改链接 | Owner |
+| `/linkdel <序号/名称>` | 删除链接 | Owner |
 
-## 📊 资源占用
+## API 端点
 
-在 512MB VPS 上实测：
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | 健康检查，返回状态 JSON |
+| `/webhook` | POST | Telegram Webhook 接收（Webhook 模式） |
+| `/admin?token=xxx` | GET | Web 管理面板（需 TG_ADMIN_TOKEN） |
 
-| 指标 | 数值 |
-|:---|:---|
-| cgroup Memory | ~26MB |
-| RSS | ~38MB |
-| 占比 | ~5% |
+## 注意事项
 
-### vps查看内存占用
+- 多对话自动路由：回复被转发的消息时，Bot 自动识别目标用户
+- 封禁用户的消息**静默丢弃**，对方不会收到任何提示
+- SQLite 数据库 `relay.db` 和 `links.json` 需确保可写
+- Webhook 模式下需配置反向代理（Nginx/Caddy）指向 `/webhook`
 
-```bash
-# 方法 1：查看 systemd 服务状态（推荐）
-systemctl status tg-relay | grep Memory
-
-# 方法 2：查看 Python 进程内存
-ps aux | grep tg-relay.py
-
-# 输出示例：
-# USER       PID %CPU %MEM    VSZ   RSS TTY  STAT START   TIME COMMAND
-# nobody    436116  0.1  2.1  312456  30752 ?    Sl   12:31   0:01 /opt/tg-relay/venv/bin/python /opt/tg-relay/tg-relay.py
-# RSS 列显示实际内存占用（KB）
-```
-
-## ⚠️ 注意事项
-
-- 仅支持**一对一**对话（同一时间维护一个活跃对话）
-- Bot 被 Block 后消息发送会失败
-- Token 泄露 → 去 @BotFather `/revoke` 换新
-- Debian 13 必须用 venv
-- 链接数据保存在 `links.json`，重启后不会丢失
-
-## 📄 License
+## License
 
 MIT

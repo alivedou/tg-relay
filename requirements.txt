@@ -1,1 +1,4 @@
 ﻿pyTelegramBotAPI
+flask
+python-dotenv
+waitress

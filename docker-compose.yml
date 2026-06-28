@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  tg-relay:
+    build: .
+    container_name: tg-relay-bot
+    restart: unless-stopped
+    ports:
+      - "${TG_PORT:-8080}:8080"
+    environment:
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
+      - TG_OWNER_ID=${TG_OWNER_ID}
+      - TG_PORT=8080
+      - TG_LOG_LEVEL=${TG_LOG_LEVEL:-INFO}
+      - TG_WEBHOOK_URL=${TG_WEBHOOK_URL:-}
+      - TG_WELCOME_OWNER=${TG_WELCOME_OWNER:-}
+      - TG_WELCOME_STRANGER=${TG_WELCOME_STRANGER:-}
+      - TG_OWNER_CONTACT=${TG_OWNER_CONTACT:-}
+      - TG_RATE_LIMIT=${TG_RATE_LIMIT:-0}
+      - TG_RATE_WINDOW=${TG_RATE_WINDOW:-10}
+      - TG_MSG_HEADER=${TG_MSG_HEADER:-}
+      - TG_MSG_FOOTER=${TG_MSG_FOOTER:-}
+      - TG_ADMIN_TOKEN=${TG_ADMIN_TOKEN:-}
+    volumes:
+      - ./data:/app
+    env_file:
+      - .env
