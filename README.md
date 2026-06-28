@@ -1,4 +1,4 @@
-# TG 双向匿名中继机器人 v2.4.0
+# TG 双向匿名中继机器人 v3.0.0
 
 > 保护聊天隐私的 Telegram 中间层。陌生人只能通过 Bot 联系你，双方互不知道真实身份。
 
@@ -19,8 +19,8 @@
 
 ```
 tg-relay/
-├── tg-relay.py          # 主程序
-├── app.py               # Pterodactyl 入口（同 tg-relay.py）
+├── app.py          # 主程序
+├── app.py               # Pterodactyl 入口（同 app.py）
 ├── requirements.txt     # Python 依赖
 ├── .env.example         # 环境变量模板
 ├── tg-relay.service     # systemd 服务文件

@@ -516,7 +516,7 @@ class HealthHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             resp = json.dumps({
                 "status": "ok",
-                "version": "2.0.0",
+                "version": "3.0.0",
                 "uptime": int(time.time() - START_TIME),
             })
             self.wfile.write(resp.encode())
@@ -536,7 +536,7 @@ try:
     data = json.loads(resp.read().decode("utf-8"))
     check("GET /health → 200", resp.status == 200, f"got {resp.status}")
     check("status == ok", data.get("status") == "ok")
-    check("version == 2.0.0", data.get("version") == "2.0.0")
+    check("version == 3.0.0", data.get("version") == "3.0.0")
     check("uptime >= 0", data.get("uptime", -1) >= 0)
 except Exception as e:
     print(f"  ❌ HTTP 测试异常: {e}")

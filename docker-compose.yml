@@ -21,7 +21,8 @@ services:
       - TG_MSG_HEADER=${TG_MSG_HEADER:-}
       - TG_MSG_FOOTER=${TG_MSG_FOOTER:-}
       - TG_ADMIN_TOKEN=${TG_ADMIN_TOKEN:-}
+      - TG_DATA_DIR=/app/data
     volumes:
-      - ./data:/app
+      - ./data:/app/data
     env_file:
       - .env

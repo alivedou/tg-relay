@@ -43,7 +43,7 @@ RATE_WINDOW = int(os.getenv("TG_RATE_WINDOW", "10"))
 MSG_HEADER = os.getenv("TG_MSG_HEADER", "")
 MSG_FOOTER = os.getenv("TG_MSG_FOOTER", "")
 ADMIN_TOKEN = os.getenv("TG_ADMIN_TOKEN", "")
-VERSION = "2.4.0"
+VERSION = "3.0.0"
 
 # ============================================================
 # 日志
@@ -76,7 +76,8 @@ START_TIME = time.time()
 # 数据目录和数据库
 # ============================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.path.join(SCRIPT_DIR, "relay.db")
+DATA_DIR = os.getenv("TG_DATA_DIR", SCRIPT_DIR)
+DB_FILE = os.path.join(DATA_DIR, "relay.db")
 
 def get_db():
     conn = sqlite3.connect(DB_FILE)
@@ -323,7 +324,7 @@ th{{color:#4fc3f7}} .bar{{display:flex;gap:16px;flex-wrap:wrap}}
 # ============================================================
 # 链接管理
 # ============================================================
-LINKS_FILE = os.path.join(SCRIPT_DIR, "links.json")
+LINKS_FILE = os.path.join(DATA_DIR, "links.json")
 
 DEFAULT_LINKS = [
     {"name": "GitHub", "url": "https://github.com", "category": "开发"},
