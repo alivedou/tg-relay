@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-TG 双向匿名中继机器人
+TG 双向匿名中继机器人 v3.1.0
+- 防封版：随机延迟 + 双轨限流
 - Flask 内嵌 HTTP 健康检查服务器
 - Polling / Webhook 双模式自适应
 - 多对话支持 + SQLite 持久化
@@ -11,6 +12,7 @@ import os
 import sys
 import time
 import json
+import random
 import logging
 import sqlite3
 import threading
@@ -33,17 +35,18 @@ except ImportError:
 TOKEN = os.getenv("TG_BOT_TOKEN") or ""
 OWNER_ID = int(os.getenv("TG_OWNER_ID") or "0")
 PORT = int(os.getenv("TG_PORT", "8080"))
-WEBHOOK_BASE = os.getenv("TG_WEBHOOK_URL", "")
+WEBHOOK_BASE = os.getenv("TG_WEBHOOK_URL", "").rstrip("/")
 LOG_LEVEL = os.getenv("TG_LOG_LEVEL", "INFO").upper()
 WELCOME_OWNER = os.getenv("TG_WELCOME_OWNER", "")
 WELCOME_STRANGER = os.getenv("TG_WELCOME_STRANGER", "")
 OWNER_CONTACT = os.getenv("TG_OWNER_CONTACT", "")
-RATE_LIMIT = int(os.getenv("TG_RATE_LIMIT", "0"))
-RATE_WINDOW = int(os.getenv("TG_RATE_WINDOW", "10"))
+RATE_LIMIT = int(os.getenv("TG_RATE_LIMIT", "5"))
+RATE_WINDOW = int(os.getenv("TG_RATE_WINDOW", "30"))
+OWNER_RATE_LIMIT = int(os.getenv("TG_OWNER_RATE_LIMIT", "8"))
 MSG_HEADER = os.getenv("TG_MSG_HEADER", "")
 MSG_FOOTER = os.getenv("TG_MSG_FOOTER", "")
 ADMIN_TOKEN = os.getenv("TG_ADMIN_TOKEN", "")
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 # ============================================================
 # 日志
@@ -58,11 +61,8 @@ logger = logging.getLogger("tg-relay")
 # ============================================================
 # 启动自检
 # ============================================================
-if not TOKEN:
-    logger.error("TG_BOT_TOKEN 未设置，退出")
-    sys.exit(1)
-if not OWNER_ID:
-    logger.error("TG_OWNER_ID 未设置或为 0，退出")
+if not TOKEN or not OWNER_ID:
+    logger.error("TG_BOT_TOKEN 或 TG_OWNER_ID 未正确设置")
     sys.exit(1)
 
 _token_masked = TOKEN[:6] + "..." + TOKEN[-4:] if len(TOKEN) > 10 else "***"
@@ -114,9 +114,10 @@ def init_db():
 init_db()
 
 # ============================================================
-# 速率限制（内存）
+# 速率限制（加强版）
 # ============================================================
-rate_limit_data = {}  # user_id -> [timestamps]
+rate_limit_data = {}      # stranger: user_id -> [timestamps]
+owner_rate_data = []      # owner: [timestamps]
 
 def check_rate_limit(user_id):
     if RATE_LIMIT <= 0:
@@ -130,6 +131,21 @@ def check_rate_limit(user_id):
         return False
     rate_limit_data[user_id].append(now)
     return True
+
+def check_owner_rate_limit():
+    if OWNER_RATE_LIMIT <= 0:
+        return True
+    now = time.time()
+    cutoff = now - RATE_WINDOW * 2
+    global owner_rate_data
+    owner_rate_data = [t for t in owner_rate_data if t > cutoff]
+    if len(owner_rate_data) >= OWNER_RATE_LIMIT:
+        return False
+    owner_rate_data.append(now)
+    return True
+
+def random_delay(min_sec=0.8, max_sec=3.0):
+    time.sleep(random.uniform(min_sec, max_sec))
 
 def block_user(stranger_id):
     conn = get_db()
@@ -903,21 +919,29 @@ def handle_all(message):
     global active_conversation
     user_id = message.from_user.id
 
-    # owner 回复被转发的消息 → 回传给对应陌生人
+    # ==================== Owner 回复被转发的消息 ====================
     if is_owner(user_id) and message.reply_to_message:
         replied_msg_id = message.reply_to_message.message_id
-        target_id = forwarded_msg_map.get(replied_msg_id)
+        with conversation_lock:
+            target_id = forwarded_msg_map.get(replied_msg_id)
         if not target_id:
             bot.reply_to(message, "⚠️ 找不到回复目标。该消息可能不是通过我转发的。\n"
                          "使用 /chat 选择对话对象后直接发消息。")
             return
+
+        if not check_owner_rate_limit():
+            bot.reply_to(message, "⚠️ 发送太频繁，请稍等。")
+            return
+
+        random_delay(1.0, 2.8)
         try:
             sent = bot.copy_message(
                 chat_id=target_id,
                 from_chat_id=message.chat.id,
                 message_id=message.message_id,
             )
-            active_conversation = target_id
+            with conversation_lock:
+                active_conversation = target_id
             upsert_conversation(target_id)
             text = message.text or message.caption or ""
             log_message(target_id, "to_stranger", "text", text[:500])
@@ -927,21 +951,21 @@ def handle_all(message):
             bot.reply_to(message, f"❌ 发送失败：{e}")
         return
 
-    # 陌生人发消息 → 转发给 owner
+    # ==================== 陌生人发消息 → 转发给 owner ====================
     if not is_owner(user_id):
         sender_name = message.from_user.first_name or "未知"
         sender_username = message.from_user.username
         sender_id = message.from_user.id
 
-        # 检查是否被封禁
+        # 封禁检查
         conv = get_conversation(sender_id)
         if conv and conv.get("is_blocked"):
-            return  # 静默丢弃
+            return
 
         # 速率限制
         if not check_rate_limit(sender_id):
-            logger.info("速率限制: %s (%s)", sender_name, sender_id)
-            return  # 静默丢弃
+            logger.info("陌生人速率限制: %s (%s)", sender_name, sender_id)
+            return
 
         upsert_conversation(sender_id, sender_name, sender_username or "")
 
@@ -951,8 +975,9 @@ def handle_all(message):
             if c["stranger_id"] == sender_id:
                 queue_pos = i
                 break
-        if not active_conversation:
-            active_conversation = sender_id
+        with conversation_lock:
+            if not active_conversation:
+                active_conversation = sender_id
 
         if MSG_HEADER:
             header = MSG_HEADER.replace("{name}", sender_name)
@@ -972,12 +997,14 @@ def handle_all(message):
             header += "⬅ 当前" if active_conversation == sender_id else ""
 
         bot.send_message(OWNER_ID, header, parse_mode="Markdown")
+        random_delay(0.5, 1.8)
         forwarded = bot.copy_message(
             chat_id=OWNER_ID,
             from_chat_id=message.chat.id,
             message_id=message.message_id,
         )
-        forwarded_msg_map[forwarded.message_id] = sender_id
+        with conversation_lock:
+            forwarded_msg_map[forwarded.message_id] = sender_id
 
         if MSG_FOOTER:
             footer = MSG_FOOTER.replace("{name}", sender_name).replace("{id}", str(sender_id))
@@ -991,8 +1018,12 @@ def handle_all(message):
         logger.info("转发: %s (%s) -> owner, 队列 #%s", sender_name, sender_id, queue_pos)
         return
 
-    # owner 直接发消息（非回复） → 发给当前活跃对话对象
+    # ==================== Owner 直接发消息 → 发给当前活跃对话 ====================
     if active_conversation:
+        if not check_owner_rate_limit():
+            bot.reply_to(message, "⚠️ 发送太频繁，请稍等。")
+            return
+        random_delay(1.2, 3.0)
         try:
             sent = bot.copy_message(
                 chat_id=active_conversation,

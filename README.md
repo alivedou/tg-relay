@@ -1,4 +1,4 @@
-# TG 双向匿名中继机器人 v3.0.0
+# TG 双向匿名中继机器人 v3.1.0
 
 > 保护聊天隐私的 Telegram 中间层。陌生人只能通过 Bot 联系你，双方互不知道真实身份。
 
@@ -75,7 +75,7 @@ docker compose up -d
 | `TG_WELCOME_OWNER` | | - | Owner 的 /start 自定义内容 |
 | `TG_WELCOME_STRANGER` | | - | 陌生人的 /start 自定义内容 |
 | `TG_OWNER_CONTACT` | | - | /about 中显示的联系方式 |
-| `TG_RATE_LIMIT` | | `0` | 每窗口最大消息数（0=关闭） |
+| `TG_RATE_LIMIT` | | `0` | 每窗口最大消息数（默认5） |
 | `TG_RATE_WINDOW` | | `10` | 速率限制窗口（秒） |
 | `TG_MSG_HEADER` | | `默认格式` | 转发消息头部模板 |
 | `TG_MSG_FOOTER` | | - | 转发消息尾部模板 |
