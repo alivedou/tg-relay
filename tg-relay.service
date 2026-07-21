@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/tg-relay
 EnvironmentFile=/opt/tg-relay/.env
-ExecStart=/opt/tg-relay/venv/bin/python /opt/tg-relay/tg-relay.py
+ExecStart=/opt/tg-relay/venv/bin/python /opt/tg-relay/app.py
 Restart=always
 RestartSec=10
 
