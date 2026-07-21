@@ -7,6 +7,6 @@ data/
 .git
 .gitignore
 README.md
-list.md
+agent.md
 test_*.py
 tg-relay.service
