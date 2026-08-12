@@ -258,6 +258,97 @@ def get_stats():
         "today_messages": today_messages,
     }
 
+def get_all_conversations():
+    """全量对话列表（含封禁用户），供卡片面板/删除使用"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM conversations ORDER BY last_message_time DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def delete_conversation(stranger_id):
+    """彻底删除一个对话对象及其全部消息记录（不可恢复）"""
+    global active_conversation
+    conn = get_db()
+    conn.execute("DELETE FROM messages WHERE stranger_id = ?", (stranger_id,))
+    conn.execute("DELETE FROM conversations WHERE stranger_id = ?", (stranger_id,))
+    conn.commit()
+    conn.close()
+    with conversation_lock:
+        if active_conversation == stranger_id:
+            active_conversation = None
+        stale = [k for k, v in forwarded_msg_map.items() if v == stranger_id]
+        for k in stale:
+            forwarded_msg_map.pop(k, None)
+
+# ============================================================
+# 对话卡片面板（/contacts）
+# ============================================================
+CARD_PER_PAGE = 5
+
+def format_relative_time(ts):
+    if not ts:
+        return "无"
+    diff = int(time.time()) - ts
+    if diff < 60:
+        return "刚刚"
+    if diff < 3600:
+        return f"{diff // 60} 分钟前"
+    if diff < 86400:
+        return f"{diff // 3600} 小时前"
+    if diff < 86400 * 7:
+        return f"{diff // 86400} 天前"
+    return time.strftime("%m-%d", time.localtime(ts))
+
+def build_contacts_keyboard(page=0):
+    convos = get_all_conversations()
+    total_pages = max(1, (len(convos) + CARD_PER_PAGE - 1) // CARD_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * CARD_PER_PAGE
+    items = convos[start:start + CARD_PER_PAGE]
+    keyboard = types.InlineKeyboardMarkup(row_width=3)
+    for c in items:
+        sid = c["stranger_id"]
+        ban_label = "✅ 解封" if c["is_blocked"] else "🚫 拉黑"
+        keyboard.add(
+            types.InlineKeyboardButton("💬 对话", callback_data=f"card_switch_{sid}_{page}"),
+            types.InlineKeyboardButton("🗑 删除", callback_data=f"card_del_{sid}_{page}"),
+            types.InlineKeyboardButton(ban_label, callback_data=f"card_ban_{sid}_{page}"),
+        )
+    nav = []
+    if page > 0:
+        nav.append(types.InlineKeyboardButton("◀️", callback_data=f"card_page_{page - 1}"))
+    nav.append(types.InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="card_none"))
+    if page < total_pages - 1:
+        nav.append(types.InlineKeyboardButton("▶️", callback_data=f"card_page_{page + 1}"))
+    keyboard.add(*nav)
+    return keyboard
+
+def render_contacts_page(page=0):
+    convos = get_all_conversations()
+    total_pages = max(1, (len(convos) + CARD_PER_PAGE - 1) // CARD_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * CARD_PER_PAGE
+    items = convos[start:start + CARD_PER_PAGE]
+    if not items:
+        return "📭 暂无对话对象。\n\n使用 /del <ID> 删除指定对话"
+    lines = [f"👥 对话卡片（共 {len(convos)} 人）\n"]
+    for c in items:
+        name = c["first_name"] or "未知"
+        username = f" @{c['username']}" if c["username"] else ""
+        note = f"\n🏷 备注：{c['note']}" if c["note"] else ""
+        blocked = " 🔒已拉黑" if c["is_blocked"] else ""
+        active = " ⬅当前" if c["stranger_id"] == active_conversation else ""
+        last = format_relative_time(c["last_message_time"])
+        count = c["message_count"]
+        lines.append(
+            f"👤 {name}{username}{blocked}{active}\n"
+            f"🆔 {c['stranger_id']} ｜ ⏱ {last} ｜ 💬 {count}条{note}"
+        )
+        lines.append("───")
+    return "\n".join(lines)
+
 def is_owner(user_id):
     return user_id == OWNER_ID
 
@@ -566,6 +657,17 @@ def handle_chat(message):
         else:
             bot.reply_to(message, f"❌ 未找到用户 ID: {sid}")
 
+@bot.message_handler(commands=["contacts"])
+def handle_contacts(message):
+    if not is_owner(message.from_user.id):
+        return
+    page = 0
+    parts = message.text.split()
+    if len(parts) > 1 and parts[1].isdigit():
+        page = max(0, int(parts[1]) - 1)
+    bot.reply_to(message, render_contacts_page(page),
+                 reply_markup=build_contacts_keyboard(page))
+
 @bot.message_handler(commands=["note"])
 def handle_note(message):
     if not is_owner(message.from_user.id):
@@ -672,6 +774,52 @@ def handle_banlist(message):
         username = f" (@{b['username']})" if b["username"] else ""
         result += f"  • {name}{username} (ID: {b['stranger_id']})\n"
     bot.reply_to(message, result)
+
+@bot.message_handler(commands=["del"])
+def handle_del(message):
+    if not is_owner(message.from_user.id):
+        return
+    parts = message.text.split(" ", 2)
+    if len(parts) < 2:
+        bot.reply_to(message, "⚠️ 用法：/del <ID/序号> [confirm]\n示例：/del 123456789")
+        return
+    target = parts[1].strip()
+    confirm = len(parts) > 2 and parts[2].strip().lower() == "confirm"
+
+    # 解析目标：优先序号（全量列表含封禁），否则按 ID
+    convos = get_all_conversations()
+    sid = None
+    if target.isdigit():
+        index = int(target) - 1
+        if 0 <= index < len(convos):
+            sid = convos[index]["stranger_id"]
+        else:
+            sid = int(target)
+    if sid is None:
+        try:
+            sid = int(target)
+        except ValueError:
+            bot.reply_to(message, "❌ 请输入有效序号或用户 ID")
+            return
+
+    conv = get_conversation(sid)
+    if not conv:
+        bot.reply_to(message, f"❌ 未找到对话对象: {target}")
+        return
+
+    name = (conv["first_name"] or "未知") or "未知"
+    if not confirm:
+        bot.reply_to(
+            message,
+            f"⚠️ 确认删除 {name} (ID: {sid}) 的全部记录？\n"
+            f"此操作不可恢复，将同时清空其消息历史。\n\n"
+            f"确认请回复：/del {target} confirm"
+        )
+        return
+
+    delete_conversation(sid)
+    logger.info("删除对话对象: %s (%s)", name, sid)
+    bot.reply_to(message, f"🗑 已删除 {name} (ID: {sid}) 及其全部记录。")
 
 @bot.message_handler(commands=["send"])
 def handle_send(message):
@@ -897,6 +1045,74 @@ def callback_chat(call):
     else:
         bot.answer_callback_query(call.id, "❌ 用户不存在")
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("card_"))
+def callback_card(call):
+    global active_conversation
+    if not is_owner(call.from_user.id):
+        bot.answer_callback_query(call.id, "❌ 仅限 owner")
+        return
+    parts = call.data.split("_")
+    action = parts[1]
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+
+    if action == "none":
+        bot.answer_callback_query(call.id, f"当前第 {int(parts[2]) + 1} 页")
+        return
+    if action == "page":
+        page = int(parts[2])
+        bot.edit_message_text(render_contacts_page(page), chat_id, msg_id,
+                              reply_markup=build_contacts_keyboard(page))
+        bot.answer_callback_query(call.id)
+        return
+
+    sid = int(parts[2])
+    page = int(parts[3]) if len(parts) > 3 else 0
+    conv = get_conversation(sid)
+    name = (conv["first_name"] if conv else "未知") or "未知"
+
+    if action == "switch":
+        if not conv:
+            bot.answer_callback_query(call.id, "❌ 用户不存在")
+            return
+        active_conversation = sid
+        bot.answer_callback_query(call.id, f"✅ 已切换到: {name}")
+        bot.edit_message_text(render_contacts_page(page), chat_id, msg_id,
+                              reply_markup=build_contacts_keyboard(page))
+    elif action == "del":
+        if not conv:
+            bot.answer_callback_query(call.id, "❌ 用户不存在")
+            return
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            types.InlineKeyboardButton("✅ 确认删除", callback_data=f"card_delok_{sid}_{page}"),
+            types.InlineKeyboardButton("❌ 取消", callback_data=f"card_page_{page}"),
+        )
+        bot.edit_message_text(
+            f"⚠️ 确认删除 {name} (ID: {sid}) 的全部记录？\n"
+            f"此操作不可恢复，将同时清空其消息历史。",
+            chat_id, msg_id, reply_markup=kb)
+        bot.answer_callback_query(call.id, "⚠️ 请再次确认")
+    elif action == "delok":
+        delete_conversation(sid)
+        logger.info("卡片删除对话对象: %s (%s)", name, sid)
+        bot.answer_callback_query(call.id, f"🗑 已删除: {name}")
+        bot.edit_message_text(
+            f"🗑 已删除 {name} (ID: {sid}) 及其全部记录。\n\n{render_contacts_page(page)}",
+            chat_id, msg_id, reply_markup=build_contacts_keyboard(page))
+    elif action == "ban":
+        if not conv:
+            bot.answer_callback_query(call.id, "❌ 用户不存在")
+            return
+        if conv.get("is_blocked"):
+            unblock_user(sid)
+            bot.answer_callback_query(call.id, f"✅ 已解封: {name}")
+        else:
+            block_user(sid)
+            bot.answer_callback_query(call.id, f"🚫 已拉黑: {name}")
+        bot.edit_message_text(render_contacts_page(page), chat_id, msg_id,
+                              reply_markup=build_contacts_keyboard(page))
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("links_"))
 def callback_links(call):
     parts = call.data.split("_")
@@ -1078,6 +1294,8 @@ if __name__ == "__main__":
             types.BotCommand("ban", "封禁用户(Owner)"),
             types.BotCommand("unban", "解封用户(Owner)"),
             types.BotCommand("banlist", "封禁列表(Owner)"),
+            types.BotCommand("del", "删除对话对象(Owner)"),
+            types.BotCommand("contacts", "对话卡片面板(Owner)"),
             types.BotCommand("links", "可用链接"),
             types.BotCommand("linkcat", "按类别查看链接"),
             types.BotCommand("linkfind", "搜索链接"),

@@ -582,10 +582,92 @@ check(".dockerignore: *.pyc", "*.pyc" in ignore)
 check(".dockerignore: .env", ".env" in ignore)
 
 # ============================================================
+# 测试 9.5: 删除对话 + 卡片面板逻辑（真实函数）
+# ============================================================
+print("\n📦 测试 9.5: 删除对话 + 卡片面板")
+
+import importlib.util
+# 测试环境可能没有 waitress，注入 stub（测试不启动真实 WSGI）
+import sys as _sys
+import types as _types
+if "waitress" not in _sys.modules:
+    _waitress_stub = _types.ModuleType("waitress")
+    def _serve(*a, **k):
+        raise RuntimeError("stub waitress serve 不应被调用")
+    _waitress_stub.serve = _serve
+    _sys.modules["waitress"] = _waitress_stub
+# telebot 新版会从 token 提取 bot_id，假 token 必须以数字开头
+os.environ["TG_BOT_TOKEN"] = "1234567890:fake-bot-token-for-unit-test"
+_spec = importlib.util.spec_from_file_location(
+    "tgapp", os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py"))
+_tgapp = importlib.util.module_from_spec(_spec)
+# 隔离数据库，避免污染真实数据
+os.environ["TG_DATA_DIR"] = tempfile.gettempdir()
+try:
+    _spec.loader.exec_module(_tgapp)
+    _app_ok = True
+except SystemExit:
+    _app_ok = False
+except Exception as e:
+    check("app import 异常", False, str(e))
+    _app_ok = False
+
+if _app_ok:
+    # 造数据：Alice + 2 条消息
+    _tgapp.upsert_conversation(100, "Alice", "alice_tg")
+    _tgapp.log_message(100, "from_stranger", "text", "Hello!", 0)
+    _tgapp.log_message(100, "to_stranger", "text", "Hi!", 0)
+    conv = _tgapp.get_conversation(100)
+    check("upsert Alice 存在", conv is not None and conv["first_name"] == "Alice")
+    check("get_all_conversations 含 Alice", any(c["stranger_id"] == 100 for c in _tgapp.get_all_conversations()))
+
+    # 卡片渲染包含关键信息
+    page_text = _tgapp.render_contacts_page(0)
+    check("卡片渲染含名字", "Alice" in page_text)
+    check("卡片渲染含 ID", "100" in page_text)
+
+    # 键盘构造：callback_data 长度不超 64
+    kb = _tgapp.build_contacts_keyboard(0)
+    all_ok = True
+    for row in kb.keyboard:
+        for btn in row:
+            if btn.callback_data and len(btn.callback_data) > 64:
+                all_ok = False
+                print(f"    ❌ callback 超长: {btn.callback_data}")
+    check("callback_data 全部 ≤64", all_ok)
+
+    # 分页：插入 6 个用户，验证第 2 页和越界 clamp
+    for i in range(101, 107):
+        _tgapp.upsert_conversation(i, f"User{i}", f"u{i}")
+    total = _tgapp.get_all_conversations()
+    check("全量列表 >5（可分页）", len(total) >= 6, f"got {len(total)}")
+    p2 = _tgapp.render_contacts_page(1)
+    check("第 2 页渲染正常", "User" in p2 or "────" in p2)
+    p_clamped = _tgapp.render_contacts_page(99)
+    check("越界页码不报错", isinstance(p_clamped, str) and len(p_clamped) > 0)
+
+    # 删除逻辑：设置 active + 映射，删除后全清
+    _tgapp.active_conversation = 100
+    _tgapp.forwarded_msg_map[777] = 100
+    _tgapp.forwarded_msg_map[888] = 101
+    _tgapp.delete_conversation(100)
+    check("删除后 conversations 无 100", _tgapp.get_conversation(100) is None)
+    check("删除后 active 被重置", _tgapp.active_conversation is None)
+    check("删除后 映射 777 被清", 777 not in _tgapp.forwarded_msg_map)
+    check("删除后 映射 888 保留", 888 in _tgapp.forwarded_msg_map)
+    msgs = _tgapp.get_history(100, limit=100)
+    check("删除后消息清空", len(msgs) == 0, f"got {len(msgs)}")
+    # 删除不存在的 ID 不报错
+    try:
+        _tgapp.delete_conversation(999999)
+        check("删除不存在 ID 不报错", True)
+    except Exception as e:
+        check("删除不存在 ID 不报错", False, str(e))
+
+# ============================================================
 # 测试 9: 启动自检逻辑模拟
 # ============================================================
 print("\n📦 测试 9: 启动自检逻辑")
-
 # 模拟缺少 TOKEN
 _errors = []
 if not os.getenv("TG_BOT_TOKEN"):
