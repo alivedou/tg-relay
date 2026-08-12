@@ -672,6 +672,107 @@ def handle_contacts(message):
 # ============================================================
 # 命令菜单（/menu）
 # ============================================================
+# pending 输入状态：user_id -> {"action": ..., "sid": ...}
+# 用户在菜单里选择了目标后，bot 提示输入内容，下一条普通消息作为参数消费
+pending_input = {}
+PENDING_TIMEOUT = 300  # 5 分钟未输入自动清空
+
+def set_pending(user_id, action, sid=None, extra=None):
+    pending_input[user_id] = {
+        "action": action, "sid": sid, "extra": extra or {},
+        "ts": time.time(),
+    }
+
+def clear_pending(user_id):
+    pending_input.pop(user_id, None)
+
+def cleanup_pending():
+    now = time.time()
+    for uid in [u for u, p in pending_input.items() if now - p["ts"] > PENDING_TIMEOUT]:
+        pending_input.pop(uid, None)
+
+# 菜单里「点选式」命令：点击后先弹对象列表，再执行
+PICK_ACTIONS = {
+    "chat":    ("🔀 切换对话", False),
+    "del":     ("🗑 删除对话", False),
+    "note":    ("🏷 备注用户", True),
+    "history": ("📜 消息记录", False),
+    "export":  ("📤 导出对话", False),
+    "send":    ("✉️ 主动发送", True),
+    "ban":     ("🚫 封禁用户", False),
+    "unban":   ("✅ 解封用户", False),
+}
+
+def build_pick_keyboard(action, page=0):
+    """对话选择列表（含分页），点选后触发 pick_do_<action>_<sid>"""
+    convos = get_all_conversations()
+    per_page = 8
+    total_pages = max(1, (len(convos) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start = page * per_page
+    items = convos[start:start + per_page]
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for c in items:
+        sid = c["stranger_id"]
+        name = (c["first_name"] or "未知")[:12]
+        if c.get("is_blocked"):
+            name += " 🔒"
+        if sid == active_conversation:
+            name += " ⬅"
+        kb.add(types.InlineKeyboardButton(name, callback_data=f"pick_do_{action}_{sid}"))
+    nav = []
+    if page > 0:
+        nav.append(types.InlineKeyboardButton("◀️", callback_data=f"pick_list_{action}_{page - 1}"))
+    nav.append(types.InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="pick_none"))
+    if page < total_pages - 1:
+        nav.append(types.InlineKeyboardButton("▶️", callback_data=f"pick_list_{action}_{page + 1}"))
+    kb.add(*nav)
+    kb.add(types.InlineKeyboardButton("◀️ 返回菜单", callback_data="menu_cat_root"))
+    return kb
+
+def build_link_pick_keyboard(page=0):
+    """链接选择列表（删除用），点选后触发 pick_do_linkdel_<index>"""
+    links = load_links()
+    per_page = 8
+    total_pages = max(1, (len(links) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start = page * per_page
+    items = links[start:start + per_page]
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for i, link in enumerate(items, start + 1):
+        label = f"{i}. {link['name']}"[:20]
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"pick_do_linkdel_{i - 1}"))
+    nav = []
+    if page > 0:
+        nav.append(types.InlineKeyboardButton("◀️", callback_data=f"pick_list_linkdel_{page - 1}"))
+    nav.append(types.InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="pick_none"))
+    if page < total_pages - 1:
+        nav.append(types.InlineKeyboardButton("▶️", callback_data=f"pick_list_linkdel_{page + 1}"))
+    kb.add(*nav)
+    kb.add(types.InlineKeyboardButton("◀️ 返回菜单", callback_data="menu_cat_root"))
+    return kb
+
+def build_category_keyboard(page=0):
+    """链接类别选择列表，点选后触发 pick_do_linkcat_<category>"""
+    cats = sorted({l["category"] for l in load_links()})
+    per_page = 8
+    total_pages = max(1, (len(cats) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start = page * per_page
+    items = cats[start:start + per_page]
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for cat in items:
+        kb.add(types.InlineKeyboardButton(f"📁 {cat}", callback_data=f"pick_do_linkcat_{cat}"))
+    nav = []
+    if page > 0:
+        nav.append(types.InlineKeyboardButton("◀️", callback_data=f"pick_list_linkcat_{page - 1}"))
+    nav.append(types.InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="pick_none"))
+    if page < total_pages - 1:
+        nav.append(types.InlineKeyboardButton("▶️", callback_data=f"pick_list_linkcat_{page + 1}"))
+    kb.add(*nav)
+    kb.add(types.InlineKeyboardButton("◀️ 返回菜单", callback_data="menu_cat_root"))
+    return kb
+
 MENU_CATS = [
     ("dialog", "💬 对话管理", [
         ("contacts", "📇 对话卡片"),
@@ -707,19 +808,18 @@ MENU_CATS = [
 ]
 
 MENU_USAGE = {
-    "chat": "🔀 切换对话\n用法：/chat <序号> 或 /chat <用户ID>\n不带参数弹按钮选择",
-    "del": "🗑 删除对话\n用法：/del <ID/序号> confirm\nconfirm 是二次确认，删后不可恢复",
-    "note": "🏷 备注用户\n用法：/note <用户ID> <备注内容>",
-    "history": "📜 消息记录\n用法：/history [ID/序号]\n默认查看当前对话，最多10条",
-    "export": "📤 导出对话\n用法：/export [ID/序号]\n默认导出当前对话，最多1000条",
-    "send": "✉️ 主动发送\n用法：/send <用户ID> <消息内容>",
-    "ban": "🚫 封禁用户\n用法：/ban <用户ID>",
-    "unban": "✅ 解封用户\n用法：/unban <用户ID>",
-    "linkcat": "📁 按类别查看\n用法：/linkcat <类别>\n示例：/linkcat 开发",
-    "linkfind": "🔍 搜索链接\n用法：/linkfind <关键词>",
+    "linkfind": "🔍 搜索链接\n用法：/linkfind <关键词>\n或点菜单按钮后直接发送关键词",
     "linkadd": "➕ 添加链接\n用法：/linkadd <名称>;<URL>[;<类别>]\n示例：/linkadd VSCode;https://code.visualstudio.com;开发",
-    "linkdel": "➖ 删除链接\n用法：/linkdel <序号> 或 /linkdel <链接名>",
     "linkedit": "✏️ 修改链接\n用法：/linkedit <旧名>;<新名>;<新URL>;<新类别>\n留空表示不修改",
+}
+
+# 点选式命令的输入提示（点了目标后 bot 等用户发消息）
+PICK_PROMPT = {
+    "note": "🏷 备注用户\n\n请直接发送备注内容：",
+    "send": "✉️ 主动发送\n\n请直接发送要发给对方的内容：",
+    "linkadd": "➕ 添加链接\n\n请直接发送：名称;URL;类别\n示例：VSCode;https://code.visualstudio.com;开发\n（类别可省略）",
+    "linkfind": "🔍 搜索链接\n\n请直接发送关键词：",
+    "linkedit": "✏️ 修改链接\n\n请直接发送：旧名;新名;新URL;新类别\n示例：GitHub;GH;https://github.com;开发\n（留空表示不修改该字段）",
 }
 
 # 无参命令：直接执行（存函数名，callback 触发时才解析，避免前向引用）
@@ -801,6 +901,45 @@ def callback_menu(call):
 
     if action == "exec":
         cmd = parts[2] if len(parts) > 2 else ""
+        # 链接删除：弹链接选择列表
+        if cmd == "linkdel":
+            links = load_links()
+            if not links:
+                bot.answer_callback_query(call.id, "❌ 没有链接可删")
+                return
+            bot.edit_message_text(f"➖ 选择要删除的链接（共 {len(links)} 条）：",
+                                  chat_id, msg_id,
+                                  reply_markup=build_link_pick_keyboard(0))
+            bot.answer_callback_query(call.id)
+            return
+        # 链接类别：弹类别选择列表
+        if cmd == "linkcat":
+            cats = sorted({l["category"] for l in load_links()})
+            if not cats:
+                bot.answer_callback_query(call.id, "❌ 没有链接")
+                return
+            bot.edit_message_text(f"📁 选择类别（共 {len(cats)} 个）：", chat_id, msg_id,
+                                  reply_markup=build_category_keyboard(0))
+            bot.answer_callback_query(call.id)
+            return
+        # 点选式命令：弹对象选择列表 或 进入输入模式
+        if cmd in PICK_ACTIONS:
+            label, needs_input = PICK_ACTIONS[cmd]
+            convos = get_all_conversations()
+            if not convos:
+                bot.answer_callback_query(call.id, "📭 没有对话对象")
+                return
+            bot.edit_message_text(f"{label}\n请选择对象：", chat_id, msg_id,
+                                  reply_markup=build_pick_keyboard(cmd, 0))
+            bot.answer_callback_query(call.id)
+            return
+        # 输入式命令：直接等用户发内容
+        if cmd in PICK_PROMPT:
+            set_pending(call.from_user.id, cmd)
+            bot.edit_message_text(PICK_PROMPT[cmd], chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
+            bot.answer_callback_query(call.id, "请直接输入内容")
+            return
         if cmd in MENU_USAGE:
             bot.edit_message_text(MENU_USAGE[cmd], chat_id, msg_id,
                                   reply_markup=build_menu_keyboard(is_owner_user=True))
@@ -827,6 +966,166 @@ def callback_menu(call):
             except Exception as e:
                 logger.warning("菜单执行 /%s 失败: %s", cmd, e)
                 bot.send_message(chat_id, f"❌ 执行 /{cmd} 失败：{e}")
+        return
+
+# ============================================================
+# 点选式交互回调（pick_*）
+# ============================================================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("pick_"))
+def callback_pick(call):
+    global active_conversation
+    if not is_owner(call.from_user.id):
+        bot.answer_callback_query(call.id, "❌ 仅限 owner")
+        return
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    parts = call.data.split("_")
+    sub = parts[1] if len(parts) > 1 else ""
+    action = parts[2] if len(parts) > 2 else ""
+
+    if sub == "none":
+        bot.answer_callback_query(call.id)
+        return
+
+    # 翻页
+    if sub == "list":
+        page = int(parts[3]) if len(parts) > 3 else 0
+        if action == "linkdel":
+            bot.edit_message_text("➖ 选择要删除的链接：", chat_id, msg_id,
+                                  reply_markup=build_link_pick_keyboard(page))
+        elif action == "linkcat":
+            bot.edit_message_text("📁 选择类别：", chat_id, msg_id,
+                                  reply_markup=build_category_keyboard(page))
+        else:
+            label, _ = PICK_ACTIONS.get(action, ("", False))
+            bot.edit_message_text(f"{label}\n请选择对象：", chat_id, msg_id,
+                                  reply_markup=build_pick_keyboard(action, page))
+        bot.answer_callback_query(call.id)
+        return
+
+    # 选中对象后执行
+    if sub == "do":
+        # linkcat: 选中类别（类别名是 parts[3:] 拼接，因为可能含下划线）
+        if action == "linkcat":
+            cat = "_".join(parts[3:]) if len(parts) > 3 else ""
+            links = get_links_by_category(cat)
+            if not links:
+                bot.answer_callback_query(call.id, "❌ 该类别无链接")
+                return
+            keyboard = build_links_keyboard(0, cat)
+            bot.edit_message_text(f"📁 类别：{cat}（共 {len(links)} 条）", chat_id, msg_id,
+                                  reply_markup=keyboard)
+            bot.answer_callback_query(call.id)
+            return
+        sid = int(parts[3]) if len(parts) > 3 else 0
+        if action == "linkdel":
+            links = load_links()
+            if sid < 0 or sid >= len(links):
+                bot.answer_callback_query(call.id, "❌ 链接不存在")
+                return
+            link = links[sid]
+            confirm_kb = types.InlineKeyboardMarkup(row_width=2)
+            confirm_kb.add(
+                types.InlineKeyboardButton("✅ 确认删除", callback_data=f"pick_confirm_linkdel_{sid}"),
+                types.InlineKeyboardButton("❌ 取消", callback_data="pick_list_linkdel_0"),
+            )
+            bot.edit_message_text(
+                f"⚠️ 确认删除链接：{link['name']}\n{link['url']}", chat_id, msg_id,
+                reply_markup=confirm_kb)
+            bot.answer_callback_query(call.id, "⚠️ 请再次确认")
+            return
+        conv = get_conversation(sid)
+        if not conv:
+            bot.answer_callback_query(call.id, "❌ 用户不存在")
+            return
+        name = (conv["first_name"] or "未知") or "未知"
+
+        if action == "chat":
+            active_conversation = sid
+            bot.answer_callback_query(call.id, f"✅ 已切换到: {name}")
+            bot.edit_message_text(f"✅ 当前对话: {name} (ID: {sid})", chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
+        elif action == "history":
+            msgs = get_history(sid, limit=10)
+            if not msgs:
+                bot.answer_callback_query(call.id, "📭 暂无消息")
+                bot.edit_message_text(f"📜 {name} (ID: {sid})\n📭 暂无消息记录。",
+                                      chat_id, msg_id)
+                return
+            result = f"📜 {name} (ID: {sid}) 最近消息:\n\n"
+            for m in reversed(msgs):
+                arrow = "⬅" if m["direction"] == "from_stranger" else "➡"
+                ts = time.strftime("%m-%d %H:%M", time.localtime(m["timestamp"]))
+                content = (m["content"] or "")[:50]
+                if not content:
+                    content = f"[{m['content_type']}]"
+                result += f"{arrow} [{ts}] {content}\n"
+            bot.edit_message_text(result, chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
+            bot.answer_callback_query(call.id)
+        elif action == "export":
+            text = export_history(sid)
+            if not text:
+                bot.answer_callback_query(call.id, "❌ 无记录")
+                return
+            if len(text) > 3800:
+                text = text[:3800] + "\n...(已截断)"
+            bot.edit_message_text(text, chat_id, msg_id)
+            bot.answer_callback_query(call.id, "📤 已导出")
+        elif action == "ban":
+            block_user(sid)
+            bot.answer_callback_query(call.id, f"🚫 已封禁: {name}")
+            bot.edit_message_text(f"🚫 已封禁 {name} (ID: {sid})", chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
+        elif action == "unban":
+            unblock_user(sid)
+            bot.answer_callback_query(call.id, f"✅ 已解封: {name}")
+            bot.edit_message_text(f"✅ 已解封 {name} (ID: {sid})", chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
+        elif action == "del":
+            confirm_kb = types.InlineKeyboardMarkup(row_width=2)
+            confirm_kb.add(
+                types.InlineKeyboardButton("✅ 确认删除", callback_data=f"pick_confirm_del_{sid}"),
+                types.InlineKeyboardButton("❌ 取消", callback_data="pick_list_del_0"),
+            )
+            bot.edit_message_text(
+                f"⚠️ 确认删除 {name} (ID: {sid}) 的全部记录？\n此操作不可恢复。",
+                chat_id, msg_id, reply_markup=confirm_kb)
+            bot.answer_callback_query(call.id, "⚠️ 请再次确认")
+        elif action in ("note", "send"):
+            set_pending(call.from_user.id, action, sid)
+            bot.edit_message_text(PICK_PROMPT[action], chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
+            bot.answer_callback_query(call.id, "请直接输入内容")
+        return
+
+    # 二次确认
+    if sub == "confirm":
+        sid = int(parts[3]) if len(parts) > 3 else 0
+        if action == "linkdel":
+            links = load_links()
+            if sid < 0 or sid >= len(links):
+                bot.answer_callback_query(call.id, "❌ 链接不存在")
+                return
+            name = links[sid]["name"]
+            links.pop(sid)
+            save_links(links)
+            bot.answer_callback_query(call.id, f"✅ 已删除: {name}")
+            bot.edit_message_text(f"✅ 已删除链接：{name}", chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
+            return
+        conv = get_conversation(sid)
+        if not conv:
+            bot.answer_callback_query(call.id, "❌ 用户不存在")
+            return
+        name = (conv["first_name"] or "未知") or "未知"
+        if action == "del":
+            delete_conversation(sid)
+            logger.info("菜单删除对话对象: %s (%s)", name, sid)
+            bot.answer_callback_query(call.id, f"🗑 已删除: {name}")
+            bot.edit_message_text(f"🗑 已删除 {name} (ID: {sid}) 及其全部记录。",
+                                  chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
         return
 
 @bot.message_handler(commands=["note"])
@@ -1295,6 +1594,89 @@ def callback_links(call):
 def handle_all(message):
     global active_conversation
     user_id = message.from_user.id
+
+    # ==================== Owner 有 pending 输入（菜单点选后等待内容） ====================
+    if is_owner(user_id) and not message.reply_to_message:
+        cleanup_pending()
+        pending = pending_input.get(user_id)
+        if pending:
+            clear_pending(user_id)
+            action = pending["action"]
+            sid = pending.get("sid")
+            text = message.text or ""
+            if action == "note":
+                if not text.strip():
+                    bot.reply_to(message, "❌ 备注不能为空")
+                    return
+                set_note(sid, text.strip())
+                conv = get_conversation(sid)
+                name = (conv["first_name"] if conv else "未知") or "未知"
+                bot.reply_to(message, f"✅ 已为用户 {name} (ID: {sid}) 添加备注: {text.strip()}")
+                return
+            if action == "send":
+                if not text.strip():
+                    bot.reply_to(message, "❌ 内容不能为空")
+                    return
+                if not check_owner_rate_limit():
+                    bot.reply_to(message, "⚠️ 发送太频繁，请稍等。")
+                    return
+                random_delay(1.0, 2.8)
+                try:
+                    bot.send_message(sid, text)
+                    upsert_conversation(sid)
+                    log_message(sid, "to_stranger", "text", text[:500])
+                    conv = get_conversation(sid)
+                    name = (conv["first_name"] if conv else "未知") or "未知"
+                    bot.reply_to(message, f"✅ 已发送给 {name} (ID: {sid})")
+                except Exception as e:
+                    logger.warning("菜单发送失败: %s", e)
+                    bot.reply_to(message, f"❌ 发送失败：{e}")
+                return
+            if action == "linkadd":
+                rest = text.strip()
+                parts = rest.split(";", 2)
+                if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
+                    bot.reply_to(message, "❌ 格式错误，请用分号分隔\n示例：VSCode;https://code.visualstudio.com;开发")
+                    return
+                name_l = parts[0].strip()
+                url = parts[1].strip()
+                category = parts[2].strip() if len(parts) > 2 and parts[2].strip() else "常用"
+                success, msg = add_link(name_l, url, category)
+                bot.reply_to(message, msg)
+                return
+            if action == "linkfind":
+                keyword = text.strip()
+                if not keyword:
+                    bot.reply_to(message, "❌ 关键词不能为空")
+                    return
+                results = find_links(keyword)
+                if not results:
+                    bot.reply_to(message, f"❌ 未找到包含 '{keyword}' 的链接")
+                    return
+                result = f"🔍 搜索 '{keyword}'（共 {len(results)} 条）\n\n"
+                for i, link in enumerate(results, 1):
+                    result += f"  {i}. [{link['name']}]({link['url']}) — {link['category']}\n"
+                bot.reply_to(message, result, parse_mode="Markdown")
+                return
+            if action == "linkedit":
+                rest = text.strip()
+                parts = rest.split(";", 3)
+                if len(parts) < 1 or not parts[0].strip():
+                    bot.reply_to(message, "❌ 必须指定要修改的链接名称")
+                    return
+                old_name = parts[0].strip()
+                new_name = parts[1].strip() if len(parts) > 1 else ""
+                new_url = parts[2].strip() if len(parts) > 2 else ""
+                new_category = parts[3].strip() if len(parts) > 3 else ""
+                if not new_name and not new_url and not new_category:
+                    bot.reply_to(message, "❌ 至少需要指定一个新值")
+                    return
+                success, msg = edit_link(old_name,
+                    new_name=new_name or None,
+                    new_url=new_url or None,
+                    new_category=new_category or None)
+                bot.reply_to(message, msg)
+                return
 
     # ==================== Owner 回复被转发的消息 ====================
     if is_owner(user_id) and message.reply_to_message:

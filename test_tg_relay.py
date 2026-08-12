@@ -750,10 +750,15 @@ if _app_ok:
     except Exception as e:
         check("menu_exec_who 触发回复", False, str(e))
 
-    # 点 /del（带参命令 → 显示用法，走 edit 分支）
+    # 点 /del（点选式 → 弹对话选择列表，走 edit 分支）
     _FakeCall.data = "menu_exec_del"
     _tgapp.callback_menu(_FakeCall)
-    check("menu_exec_del 显示用法", any("删除对话" in e for e in _edits), str(_edits[-1:]))
+    check("menu_exec_del 弹选择列表", any("请选择对象" in e for e in _edits), str(_edits[-1:]))
+
+    # 点 /linkadd（输入式 → 提示直接发送内容）
+    _FakeCall.data = "menu_exec_linkadd"
+    _tgapp.callback_menu(_FakeCall)
+    check("menu_exec_linkadd 提示输入", any("添加链接" in e for e in _edits), str(_edits[-1:]))
 
     # 点 /ping
     _FakeCall.data = "menu_exec_ping"
@@ -764,6 +769,83 @@ if _app_ok:
     _FakeCall.data = "menu_cat_root"
     _tgapp.callback_menu(_FakeCall)
     check("menu_cat_root 可返回", True)
+
+    # ===== 点选交互测试（pick_*） =====
+    # 造一个对话对象
+    _tgapp.upsert_conversation(200, "Bob", "bob_tg")
+    _tgapp.log_message(200, "from_stranger", "text", "你好Bob", 0)
+
+    # pick_do_chat_200 → 切换对话
+    _FakeCall.data = "pick_do_chat_200"
+    _tgapp.callback_pick(_FakeCall)
+    check("pick_do_chat 切换对话", _tgapp.active_conversation == 200)
+    check("pick_do_chat 有回复", any("当前对话" in e for e in _edits), str(_edits[-1:]))
+
+    # pick_do_history_200 → 显示历史
+    _FakeCall.data = "pick_do_history_200"
+    _tgapp.callback_pick(_FakeCall)
+    check("pick_do_history 显示记录", any("最近消息" in e for e in _edits), str(_edits[-1:]))
+
+    # pick_do_note_200 → 设置 pending，等用户输入
+    _FakeCall.data = "pick_do_note_200"
+    _tgapp.callback_pick(_FakeCall)
+    check("pick_do_note 设置 pending", owner_id in _tgapp.pending_input, str(_tgapp.pending_input.keys()))
+
+    # 模拟用户发消息消费 pending（note）
+    class _FakeMsg:
+        from_user = _FakeUser()
+        chat = _FakeChat()
+        reply_to_message = None
+        text = "重要客户"
+        content_type = "text"
+        message_id = 55
+        date = int(time.time())
+    _tgapp.handle_all(_FakeMsg)
+    bob_conv = _tgapp.get_conversation(200)
+    check("pending note 已消费", bob_conv is not None and bob_conv["note"] == "重要客户",
+          str(bob_conv.get("note") if bob_conv else None))
+    check("pending 已清空", owner_id not in _tgapp.pending_input)
+
+    # pick_do_del_200 → 弹确认
+    _FakeCall.data = "pick_do_del_200"
+    _tgapp.callback_pick(_FakeCall)
+    check("pick_do_del 弹确认", any("确认删除" in e for e in _edits), str(_edits[-1:]))
+    # pick_confirm_del_200 → 执行删除
+    _FakeCall.data = "pick_confirm_del_200"
+    _tgapp.callback_pick(_FakeCall)
+    check("pick_confirm_del 已删除", _tgapp.get_conversation(200) is None)
+
+    # linkdel 流程
+    links_before = len(_tgapp.load_links())
+    _FakeCall.data = "menu_exec_linkdel"
+    _tgapp.callback_menu(_FakeCall)
+    check("menu_exec_linkdel 弹链接列表", any("删除的链接" in e for e in _edits), str(_edits[-1:]))
+    _FakeCall.data = "pick_do_linkdel_0"
+    _tgapp.callback_pick(_FakeCall)
+    check("pick_do_linkdel 弹确认", any("确认删除链接" in e for e in _edits), str(_edits[-1:]))
+    _FakeCall.data = "pick_confirm_linkdel_0"
+    _tgapp.callback_pick(_FakeCall)
+    links_after = _tgapp.load_links()
+    check("pick_confirm_linkdel 已删链接", len(links_after) == links_before - 1,
+          f"before={links_before} after={len(links_after)}")
+
+    # linkcat 流程
+    _FakeCall.data = "menu_exec_linkcat"
+    _tgapp.callback_menu(_FakeCall)
+    check("menu_exec_linkcat 弹类别列表", any("选择类别" in e for e in _edits), str(_edits[-1:]))
+    cats = sorted({l["category"] for l in _tgapp.load_links()})
+    if cats:
+        _FakeCall.data = f"pick_do_linkcat_{cats[0]}"
+        _tgapp.callback_pick(_FakeCall)
+        check("pick_do_linkcat 显示链接", any("类别" in e for e in _edits), str(_edits[-1:]))
+
+    # linkadd 输入式 pending
+    _FakeCall.data = "menu_exec_linkadd"
+    _tgapp.callback_menu(_FakeCall)
+    check("linkadd 进入 pending", owner_id in _tgapp.pending_input)
+    _FakeMsg.text = "TestLink;https://test.example.com;测试"
+    _tgapp.handle_all(_FakeMsg)
+    check("linkadd 已添加", any(l["name"] == "TestLink" for l in _tgapp.load_links()))
 
     # 恢复原始方法
     _tgapp.bot.reply_to = _orig_reply
