@@ -665,10 +665,116 @@ if _app_ok:
         check("删除不存在 ID 不报错", False, str(e))
 
 # ============================================================
+# 测试 9.6: 命令菜单（/menu）
+# ============================================================
+print("\n📦 测试 9.6: 命令菜单")
+
+if _app_ok:
+    # 主菜单键盘：4 个分类按钮
+    kb_main = _tgapp.build_menu_keyboard(is_owner_user=True)
+    cats = [btn.callback_data for row in kb_main.keyboard for btn in row]
+    check("主菜单含对话分类", "menu_cat_dialog" in cats)
+    check("主菜单含封禁分类", "menu_cat_ban" in cats)
+    check("主菜单含链接分类", "menu_cat_link" in cats)
+    check("主菜单含系统分类", "menu_cat_sys" in cats)
+
+    # 子菜单键盘：命令按钮齐全
+    kb_dialog = _tgapp.build_menu_keyboard("dialog", is_owner_user=True)
+    cmd_data = [btn.callback_data for row in kb_dialog.keyboard for btn in row]
+    for expect in ["menu_exec_contacts", "menu_exec_chat", "menu_exec_queue",
+                   "menu_exec_who", "menu_exec_del", "menu_exec_note",
+                   "menu_exec_history", "menu_exec_export", "menu_exec_send"]:
+        check(f"对话子菜单含 {expect}", expect in cmd_data)
+    check("子菜单含返回键", "menu_cat_root" in cmd_data)
+
+    # 所有 callback_data ≤64
+    all_ok = True
+    for cat_key, _, _ in _tgapp.MENU_CATS:
+        kb = _tgapp.build_menu_keyboard(cat_key, is_owner_user=True)
+        for row in kb.keyboard:
+            for btn in row:
+                if len(btn.callback_data) > 64:
+                    all_ok = False
+                    print(f"    ❌ callback 超长: {btn.callback_data}")
+    check("菜单 callback_data 全部 ≤64", all_ok)
+
+    # 渲染：主菜单与各分类
+    check("render_menu 主菜单", "TG Relay 命令菜单" in _tgapp.render_menu())
+    check("render_menu 对话分类", "对话卡片" in _tgapp.render_menu("dialog"))
+    check("render_menu 链接分类", "查看链接" in _tgapp.render_menu("link"))
+    check("render_menu 系统分类", "统计面板" in _tgapp.render_menu("sys"))
+
+    # 陌生人菜单：只显示链接入口
+    kb_stranger = _tgapp.build_menu_keyboard(is_owner_user=False)
+    stranger_data = [btn.callback_data for row in kb_stranger.keyboard for btn in row]
+    check("陌生人菜单无封禁", "menu_cat_ban" not in stranger_data)
+    check("陌生人菜单有链接", "menu_exec_links" in stranger_data)
+
+    # callback 分发：无参命令执行（stub bot 防网络调用）
+    _orig_reply = _tgapp.bot.reply_to
+    _orig_answer = _tgapp.bot.answer_callback_query
+    _orig_edit = _tgapp.bot.edit_message_text
+    _orig_send = _tgapp.bot.send_message
+    _replies = []
+    _answers = []
+    _edits = []
+    def _fake_reply(message, text, **kwargs):
+        _replies.append(text)
+    def _fake_answer(call_id, text=None, **kwargs):
+        _answers.append(text)
+    def _fake_edit(text, *a, **k):
+        _edits.append(text)
+    _tgapp.bot.reply_to = _fake_reply
+    _tgapp.bot.answer_callback_query = _fake_answer
+    _tgapp.bot.edit_message_text = _fake_edit
+    _tgapp.bot.send_message = lambda *a, **k: None
+
+    owner_id = int(os.environ.get("TG_OWNER_ID", "0"))
+    class _FakeChat:
+        id = 99999
+    class _FakeUser:
+        id = owner_id
+        username = "owner_test"
+        first_name = "Owner"
+    class _FakeCall:
+        id = "cb123"
+        data = ""
+        message = type("M", (), {"chat": _FakeChat(), "message_id": 1})()
+        from_user = _FakeUser()
+
+    # 点 /who
+    _FakeCall.data = "menu_exec_who"
+    try:
+        _tgapp.callback_menu(_FakeCall)
+        check("menu_exec_who 触发回复", any("当前对话" in r or "没有活跃对话" in r for r in _replies), str(_replies[-1:]))
+    except Exception as e:
+        check("menu_exec_who 触发回复", False, str(e))
+
+    # 点 /del（带参命令 → 显示用法，走 edit 分支）
+    _FakeCall.data = "menu_exec_del"
+    _tgapp.callback_menu(_FakeCall)
+    check("menu_exec_del 显示用法", any("删除对话" in e for e in _edits), str(_edits[-1:]))
+
+    # 点 /ping
+    _FakeCall.data = "menu_exec_ping"
+    _tgapp.callback_menu(_FakeCall)
+    check("menu_exec_ping 触发回复", any("Pong" in r for r in _replies), str(_replies[-1:]))
+
+    # 返回主菜单
+    _FakeCall.data = "menu_cat_root"
+    _tgapp.callback_menu(_FakeCall)
+    check("menu_cat_root 可返回", True)
+
+    # 恢复原始方法
+    _tgapp.bot.reply_to = _orig_reply
+    _tgapp.bot.answer_callback_query = _orig_answer
+    _tgapp.bot.edit_message_text = _orig_edit
+    _tgapp.bot.send_message = _orig_send
+
+# ============================================================
 # 测试 9: 启动自检逻辑模拟
 # ============================================================
-print("\n📦 测试 9: 启动自检逻辑")
-# 模拟缺少 TOKEN
+print("\n📦 测试 9: 启动自检逻辑")# 模拟缺少 TOKEN
 _errors = []
 if not os.getenv("TG_BOT_TOKEN"):
     _errors.append("TG_BOT_TOKEN")
