@@ -16,6 +16,7 @@ import random
 import logging
 import sqlite3
 import threading
+from types import SimpleNamespace as _SNS
 
 from flask import Flask, request, jsonify
 from waitress import serve
@@ -667,6 +668,166 @@ def handle_contacts(message):
         page = max(0, int(parts[1]) - 1)
     bot.reply_to(message, render_contacts_page(page),
                  reply_markup=build_contacts_keyboard(page))
+
+# ============================================================
+# 命令菜单（/menu）
+# ============================================================
+MENU_CATS = [
+    ("dialog", "💬 对话管理", [
+        ("contacts", "📇 对话卡片"),
+        ("chat", "🔀 切换对话"),
+        ("queue", "📋 待回复队列"),
+        ("who", "👤 当前对象"),
+        ("del", "🗑 删除对话"),
+        ("note", "🏷 备注用户"),
+        ("history", "📜 消息记录"),
+        ("export", "📤 导出对话"),
+        ("send", "✉️ 主动发送"),
+    ]),
+    ("ban", "🚫 封禁管理", [
+        ("ban", "🚫 封禁用户"),
+        ("unban", "✅ 解封用户"),
+        ("banlist", "📃 封禁列表"),
+    ]),
+    ("link", "🔗 链接管理", [
+        ("links", "🔗 查看链接"),
+        ("linkcat", "📁 按类别"),
+        ("linkfind", "🔍 搜索链接"),
+        ("linkadd", "➕ 添加链接"),
+        ("linkdel", "➖ 删除链接"),
+        ("linkedit", "✏️ 修改链接"),
+    ]),
+    ("sys", "📊 系统信息", [
+        ("stats", "📊 统计面板"),
+        ("about", "🤖 关于"),
+        ("ping", "🏓 延迟测试"),
+        ("id", "🆔 我的ID"),
+        ("help", "❓ 帮助"),
+    ]),
+]
+
+MENU_USAGE = {
+    "chat": "🔀 切换对话\n用法：/chat <序号> 或 /chat <用户ID>\n不带参数弹按钮选择",
+    "del": "🗑 删除对话\n用法：/del <ID/序号> confirm\nconfirm 是二次确认，删后不可恢复",
+    "note": "🏷 备注用户\n用法：/note <用户ID> <备注内容>",
+    "history": "📜 消息记录\n用法：/history [ID/序号]\n默认查看当前对话，最多10条",
+    "export": "📤 导出对话\n用法：/export [ID/序号]\n默认导出当前对话，最多1000条",
+    "send": "✉️ 主动发送\n用法：/send <用户ID> <消息内容>",
+    "ban": "🚫 封禁用户\n用法：/ban <用户ID>",
+    "unban": "✅ 解封用户\n用法：/unban <用户ID>",
+    "linkcat": "📁 按类别查看\n用法：/linkcat <类别>\n示例：/linkcat 开发",
+    "linkfind": "🔍 搜索链接\n用法：/linkfind <关键词>",
+    "linkadd": "➕ 添加链接\n用法：/linkadd <名称>;<URL>[;<类别>]\n示例：/linkadd VSCode;https://code.visualstudio.com;开发",
+    "linkdel": "➖ 删除链接\n用法：/linkdel <序号> 或 /linkdel <链接名>",
+    "linkedit": "✏️ 修改链接\n用法：/linkedit <旧名>;<新名>;<新URL>;<新类别>\n留空表示不修改",
+}
+
+# 无参命令：直接执行（存函数名，callback 触发时才解析，避免前向引用）
+MENU_EXEC = {
+    "contacts": "handle_contacts",
+    "queue": "handle_queue",
+    "who": "handle_who",
+    "banlist": "handle_banlist",
+    "links": "handle_links",
+    "stats": "handle_stats",
+    "about": "handle_about",
+    "ping": "handle_ping",
+    "id": "handle_id",
+    "help": "handle_start",
+}
+
+def build_menu_keyboard(cat=None, is_owner_user=True):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    if cat is None:
+        # 主菜单：分类按钮
+        for key, label, _ in MENU_CATS:
+            if not is_owner_user and key not in ("sys",):
+                continue
+            kb.add(types.InlineKeyboardButton(label, callback_data=f"menu_cat_{key}"))
+        if not is_owner_user:
+            kb.add(types.InlineKeyboardButton("🔗 查看链接", callback_data="menu_exec_links"))
+    else:
+        # 子菜单：命令按钮
+        for key, label, cmds in MENU_CATS:
+            if key != cat:
+                continue
+            for cmd, cmd_label in cmds:
+                if not is_owner_user and cmd in ("stats", "about"):
+                    continue
+                kb.add(types.InlineKeyboardButton(cmd_label, callback_data=f"menu_exec_{cmd}"))
+        kb.add(types.InlineKeyboardButton("◀️ 返回", callback_data="menu_cat_root"))
+    return kb
+
+def render_menu(cat=None):
+    if cat is None:
+        return "🤖 TG Relay 命令菜单\n\n选择分类查看命令："
+    for key, label, cmds in MENU_CATS:
+        if key == cat:
+            lines = [f"{label}\n"]
+            for cmd, cmd_label in cmds:
+                lines.append(f"`/{cmd}` — {cmd_label}")
+            return "\n".join(lines)
+    return "🤖 TG Relay 命令菜单\n\n选择分类查看命令："
+
+@bot.message_handler(commands=["menu"])
+def handle_menu(message):
+    bot.reply_to(message, render_menu(),
+                 reply_markup=build_menu_keyboard(is_owner_user=is_owner(message.from_user.id)),
+                 parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
+def callback_menu(call):
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    is_owner_user = is_owner(call.from_user.id)
+    if not is_owner_user:
+        bot.answer_callback_query(call.id, "❌ 仅限 owner 使用")
+        return
+    parts = call.data.split("_")
+    action = parts[1] if len(parts) > 1 else "root"
+
+    if action == "cat":
+        cat = parts[2] if len(parts) > 2 else "root"
+        if cat == "root":
+            bot.edit_message_text(render_menu(), chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True),
+                                  parse_mode="Markdown")
+        else:
+            bot.edit_message_text(render_menu(cat), chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(cat, is_owner_user=True),
+                                  parse_mode="Markdown")
+        bot.answer_callback_query(call.id)
+        return
+
+    if action == "exec":
+        cmd = parts[2] if len(parts) > 2 else ""
+        if cmd in MENU_USAGE:
+            bot.edit_message_text(MENU_USAGE[cmd], chat_id, msg_id,
+                                  reply_markup=build_menu_keyboard(is_owner_user=True))
+            bot.answer_callback_query(call.id, "请直接输入命令使用")
+            return
+        handler = MENU_EXEC.get(cmd)
+        if handler:
+            bot.answer_callback_query(call.id, f"执行 /{cmd} ...")
+            fn = globals().get(handler)
+            if not fn:
+                bot.answer_callback_query(call.id, f"未找到 /{cmd}")
+                return
+            fake = _SNS(
+                message_id=msg_id,
+                from_user=call.from_user,
+                date=int(time.time()),
+                chat=call.message.chat,
+                text="/" + cmd,
+                reply_to_message=None,
+                content_type="text",
+            )
+            try:
+                fn(fake)
+            except Exception as e:
+                logger.warning("菜单执行 /%s 失败: %s", cmd, e)
+                bot.send_message(chat_id, f"❌ 执行 /{cmd} 失败：{e}")
+        return
 
 @bot.message_handler(commands=["note"])
 def handle_note(message):
